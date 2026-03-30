@@ -1,103 +1,147 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys")
-const P = require("pino")
+crequire("dotenv").config();
 
-async function startBot() {
+const express = require("express");
+const P = require("pino");
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
+} = require("@whiskeysockets/baileys");
 
-    const { state, saveCreds } = await useMultiFileAuthState("./auth")
+const OpenAI = require("openai");
 
-    const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true,
-        logger: P({ level: "silent" })
-    })
+const app = express();
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
-    sock.ev.on("creds.update", saveCreds)
+// ================= OPENAI =================
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_KEY
+});
 
-    sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update
+async function askGPT(text) {
+    const res = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+            {
+                role: "system",
+                content: "You are a fitness AI coach. Give short and simple answers."
+            },
+            { role: "user", content: text }
+        ]
+    });
 
-        if (connection === "open") {
-            console.log("🤖 Bot Online!")
-        }
-
-        if (connection === "close") {
-            const shouldReconnect =
-                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-
-            console.log("❌ Disconnected. Reconnecting:", shouldReconnect)
-
-            if (shouldReconnect) startBot()
-        }
-    })
-
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-
-        const msg = messages[0]
-        if (!msg.message) return
-
-        const jid = msg.key.remoteJid
-        const text =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            ""
-
-        console.log("User:", text)
-
-        // 📌 MENU
-        if (text === "menu") {
-            return sock.sendMessage(jid, {
-                text:
-`📌 MAIN MENU
-
-01 🤖 AI Chat
-02 🏋️ Workout AI
-03 👤 Age System
-
-Type number to continue`
-            })
-        }
-
-        // 🤖 AI CHAT
-        if (text === "01") {
-            return sock.sendMessage(jid, {
-                text: "🤖 AI: Hello! Ask me anything."
-            })
-        }
-
-        // 🏋️ WORKOUT
-        if (text === "02") {
-            return sock.sendMessage(jid, {
-                text: "🏋️ Tell me your age for workout plan."
-            })
-        }
-
-        // 👤 AGE CHECK
-        if (text === "03") {
-            return sock.sendMessage(jid, {
-                text: "👤 Send: age 16"
-            })
-        }
-
-        // AGE LOGIC
-        if (text.toLowerCase().startsWith("age")) {
-
-            const age = parseInt(text.split(" ")[1])
-
-            let reply = ""
-
-            if (!age) reply = "❌ Invalid age format"
-            else if (age < 13) reply = "🧒 Kid plan: study + light play"
-            else if (age <= 18) reply = "🧑 Teen plan: gym + study balance"
-            else reply = "💪 Adult plan: gym + productivity"
-
-            return sock.sendMessage(jid, { text: reply })
-        }
-
-        // DEFAULT
-        return sock.sendMessage(jid, {
-            text: "Type 'menu' 🤖"
-        })
-    })
+    return res.choices[0].message.content;
 }
 
-startBot()
+// ================= BOT =================
+let sock;
+
+async function startBot(number) {
+    const { state, saveCreds } = await useMultiFileAuthState("./auth");
+    const { version } = await fetchLatestBaileysVersion();
+
+    sock = makeWASocket({
+        version,
+        auth: state,
+        logger: P({ level: "silent" })
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    if (!sock.authState.creds.registered) {
+        const code = await sock.requestPairingCode(number);
+        console.log("🔥 PAIR CODE:", code);
+    }
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.message) return;
+
+        const from = msg.key.remoteJid;
+
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text;
+
+        if (!text) return;
+
+        const cmd = text.toLowerCase();
+
+        // MENU
+        if (cmd === ".menu") {
+            await sock.sendMessage(from, {
+                text:
+`🤖 MENU
+
+.ai → AI coach
+.athletic → workout
+.diet → diet
+.abs → abs`
+            });
+        }
+
+        // GPT AI
+        else if (cmd.startsWith(".ai")) {
+            const q = cmd.replace(".ai", "").trim();
+
+            await sock.sendMessage(from, { text: "⏳ Thinking..." });
+
+            const answer = await askGPT(q || "fitness tips");
+
+            await sock.sendMessage(from, {
+                text: "🤖 AI:\n\n" + answer
+            });
+        }
+
+        // ATHLETIC
+        else if (cmd === ".athletic") {
+            await sock.sendMessage(from, {
+                text: "🏋️ Push ups 10x3\nSquats 15x3\nPlank 30s"
+            });
+        }
+
+        // DIET
+        else if (cmd === ".diet") {
+            await sock.sendMessage(from, {
+                text: "🥗 Eggs, Chicken, Rice\nDrink 2-3L water"
+            });
+        }
+
+        // ABS
+        else if (cmd === ".abs") {
+            await sock.sendMessage(from, {
+                text: "🔥 Crunches 15x3\nLeg raises 12x3\nPlank daily"
+            });
+        }
+
+        else if (cmd === "hi") {
+            await sock.sendMessage(from, {
+                text: "👋 Type .menu"
+            });
+        }
+    });
+}
+
+// ================= WEB PANEL =================
+app.get("/", (req, res) => {
+    res.send(`
+        <h2>WhatsApp GPT Bot</h2>
+        <form method="POST" action="/pair">
+            <input name="number" placeholder="94741954436" />
+            <button>Get Pair Code</button>
+        </form>
+    `);
+});
+
+app.post("/pair", async (req, res) => {
+    const number = req.body.number;
+    startBot(number);
+    res.send("Check console for Pair Code");
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log("Server running on", PORT);
+});
