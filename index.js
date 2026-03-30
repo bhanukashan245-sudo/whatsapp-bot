@@ -1,97 +1,103 @@
-const { default: makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys")
+const P = require("pino")
+
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("./auth");
+
+    const { state, saveCreds } = await useMultiFileAuthState("./auth")
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true
-    });
+        printQRInTerminal: true,
+        logger: P({ level: "silent" })
+    })
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", saveCreds)
 
-    console.log("🤖 AI WhatsApp Bot Started...");
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect } = update
+
+        if (connection === "open") {
+            console.log("🤖 Bot Online!")
+        }
+
+        if (connection === "close") {
+            const shouldReconnect =
+                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+
+            console.log("❌ Disconnected. Reconnecting:", shouldReconnect)
+
+            if (shouldReconnect) startBot()
+        }
+    })
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message) return;
 
-        const jid = msg.key.remoteJid;
-        const text = msg.message.conversation || "";
+        const msg = messages[0]
+        if (!msg.message) return
 
-        console.log("User:", text);
+        const jid = msg.key.remoteJid
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            ""
 
-        // 🌟 MAIN MENU
+        console.log("User:", text)
+
+        // 📌 MENU
         if (text === "menu") {
-            await sock.sendMessage(jid, {
+            return sock.sendMessage(jid, {
                 text:
 `📌 MAIN MENU
 
-01 - 🤖 AI Chat
-02 - 🏋️ AI Workout Coach
-03 - 👤 Age Check System
+01 🤖 AI Chat
+02 🏋️ Workout AI
+03 👤 Age System
 
-👉 Type number to continue`
-            });
+Type number to continue`
+            })
         }
 
         // 🤖 AI CHAT
-        else if (text === "01") {
-            await sock.sendMessage(jid, {
+        if (text === "01") {
+            return sock.sendMessage(jid, {
                 text: "🤖 AI: Hello! Ask me anything."
-            });
+            })
         }
 
-        // 🏋️ WORKOUT AI
-        else if (text === "02") {
-            await sock.sendMessage(jid, {
-                text: "🏋️ AI Workout: Tell me your age to generate plan."
-            });
+        // 🏋️ WORKOUT
+        if (text === "02") {
+            return sock.sendMessage(jid, {
+                text: "🏋️ Tell me your age for workout plan."
+            })
         }
 
-        // 👤 AGE SYSTEM
-        else if (text === "03") {
-            await sock.sendMessage(jid, {
-                text: "👤 Send your age like: age 16"
-            });
+        // 👤 AGE CHECK
+        if (text === "03") {
+            return sock.sendMessage(jid, {
+                text: "👤 Send: age 16"
+            })
         }
 
-        // AGE RESPONSE
-        else if (text.toLowerCase().startsWith("age")) {
-            const age = parseInt(text.split(" ")[1]);
+        // AGE LOGIC
+        if (text.toLowerCase().startsWith("age")) {
 
-            let reply = "";
+            const age = parseInt(text.split(" ")[1])
 
-            if (age < 13) {
-                reply = "🧒 Kid plan: light exercise + study balance";
-            }
-            else if (age >= 13 && age <= 18) {
-                reply = "🧑 Teen plan: workout + AI learning + sports";
-            }
-            else {
-                reply = "🧑‍💼 Adult plan: gym + productivity system";
-            }
+            let reply = ""
 
-            await sock.sendMessage(jid, { text: reply });
+            if (!age) reply = "❌ Invalid age format"
+            else if (age < 13) reply = "🧒 Kid plan: study + light play"
+            else if (age <= 18) reply = "🧑 Teen plan: gym + study balance"
+            else reply = "💪 Adult plan: gym + productivity"
+
+            return sock.sendMessage(jid, { text: reply })
         }
 
-        // DEFAULT AI
-        else {
-            await sock.sendMessage(jid, {
-                text: "Type 'menu' to start 🤖"
-            });
-        }
-    });
-}
-const { default: makeWASocket } = require("@whiskeysockets/baileys")
-
-function startBot() {
-    const sock = makeWASocket()
-
-    sock.ev.on("connection.update", (update) => {
-        console.log("Status:", update)
+        // DEFAULT
+        return sock.sendMessage(jid, {
+            text: "Type 'menu' 🤖"
+        })
     })
-
-    console.log("Bot started")
 }
 
 startBot()
