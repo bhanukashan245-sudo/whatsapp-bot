@@ -1,5 +1,5 @@
 {
-  "name": "whatsapp-bot",
+  "name": "whatsapp-gpt-bot",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,6 +7,9 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
-    "pino": "latest"
+    "pino": "latest",
+    "express": "latest",
+    "openai": "latest",
+    "dotenv": "latest"
   }
 }
